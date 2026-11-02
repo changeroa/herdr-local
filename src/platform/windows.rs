@@ -1020,6 +1020,20 @@ fn select_pane_foreground_job_cached(shell_pid: u32) -> Option<ForegroundJob> {
     select_pane_foreground_job_from_snapshot(shell_pid, &snapshot).map(|(job, _)| job)
 }
 
+pub fn foreground_job_for_client_registration(child_pid: u32) -> Option<ForegroundJob> {
+    let snapshot = fresh_foreground_processes();
+    select_pane_foreground_job_from_snapshot_uncached(child_pid, &snapshot)
+}
+
+pub fn process_started_at(pid: u32) -> Option<String> {
+    let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+    let mut exit_code = 0;
+    if unsafe { GetExitCodeProcess(process.0, &mut exit_code) } == 0 || exit_code != STILL_ACTIVE {
+        return None;
+    }
+    process_creation_time(process.0).map(|time| time.to_string())
+}
+
 fn select_pane_foreground_job_from_snapshot(
     shell_pid: u32,
     snapshot: &ProcessSnapshot,

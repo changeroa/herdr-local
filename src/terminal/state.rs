@@ -14,6 +14,11 @@ use crate::terminal::TerminalId;
 mod metadata;
 pub use metadata::{AgentMetadata, AgentMetadataReport, EffectivePresentation};
 
+#[path = "client_session.rs"]
+mod client_session;
+use client_session::CodexClientOwner;
+pub use client_session::CodexClientProof;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookAuthority {
     pub source: String,
@@ -128,6 +133,8 @@ pub struct TerminalState {
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    codex_client_owner: Option<CodexClientOwner>,
+    codex_client_sequences: HashMap<(u32, String), u64>,
     pub terminal_title: Option<String>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
@@ -162,6 +169,8 @@ impl TerminalState {
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
+            codex_client_owner: None,
+            codex_client_sequences: HashMap::new(),
             terminal_title: None,
             manual_label: None,
             agent_name: None,
@@ -319,6 +328,16 @@ impl TerminalState {
         process_exited: bool,
         now: Instant,
     ) -> TerminalStateMutation {
+        // A queued observation from the old process cannot release a client
+        // whose foreground proof was verified after that observation.
+        if process_exited
+            && self
+                .codex_client_owner
+                .as_ref()
+                .is_some_and(|owner| owner.verified_at > now)
+        {
+            return TerminalStateMutation::default();
+        }
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
@@ -407,6 +426,9 @@ impl TerminalState {
             self.recent_agent_process_exit = None;
         }
         if process_exited {
+            if agent == Some(Agent::Codex) {
+                self.codex_client_owner = None;
+            }
             let mut reset_sources = Vec::new();
             let mut stale_sessions = Vec::new();
             for (source, suppressed) in &mut self.suppressed_full_lifecycle_hook_reports {
@@ -640,6 +662,11 @@ impl TerminalState {
         seq: Option<u64>,
         now: Instant,
     ) -> Option<TerminalStateMutation> {
+        if source == "herdr:codex-client"
+            || (source == "herdr:codex" && self.codex_client_owner.is_some())
+        {
+            return None;
+        }
         if crate::detect::session_identity_only_integration(&source, &agent_label) {
             return None;
         }
@@ -1258,7 +1285,8 @@ impl TerminalState {
     fn current_session_owner_conflicts(&self, source: &str, agent_label: &str) -> bool {
         self.current_session_identity_for_persistence().is_some_and(
             |(current_source, current_agent, _, _)| {
-                current_source != source || current_agent != agent_label
+                !(current_source == "herdr:codex-client" && self.codex_client_owner.is_none())
+                    && (current_source != source || current_agent != agent_label)
             },
         )
     }
@@ -1385,6 +1413,14 @@ impl TerminalState {
         seq: Option<u64>,
         session_start_source: Option<String>,
     ) -> Option<TerminalStateMutation> {
+        // Client identity is accepted only through the runtime-verified path.
+        // Keeping the owner after clear is essential: there may be no visible
+        // session for the normal identity conflict checks to protect.
+        if source == "herdr:codex-client"
+            || (source == "herdr:codex" && self.codex_client_owner.is_some())
+        {
+            return None;
+        }
         let session_ref = session_ref?;
         let known_agent = crate::detect::parse_agent_label(&agent_label);
         let process_present = known_agent.is_some()
@@ -1729,6 +1765,11 @@ impl TerminalState {
         agent_label: &str,
         seq: Option<u64>,
     ) -> Option<TerminalStateMutation> {
+        if source == "herdr:codex-client"
+            || (source == "herdr:codex" && self.codex_client_owner.is_some())
+        {
+            return None;
+        }
         if self.hook_authority.as_ref().is_some_and(|authority| {
             authority.agent_label != agent_label || authority.source != source
         }) {

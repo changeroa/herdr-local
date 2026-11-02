@@ -393,6 +393,12 @@ pub struct PaneReportAgentSessionParams {
     pub agent_session_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_start_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_process_id: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_process_started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_terminal_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -503,6 +509,9 @@ pub struct PaneProcessInfo {
 pub struct PaneProcessInfoProcess {
     pub pid: u32,
     pub name: String,
+    /// Opaque OS process generation. Copy verbatim when registering a client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argv0: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

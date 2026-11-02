@@ -163,6 +163,14 @@ pub fn foreground_job(_child_pid: u32) -> Option<ForegroundJob> {
     None
 }
 
+pub fn foreground_job_for_client_registration(_child_pid: u32) -> Option<ForegroundJob> {
+    None
+}
+
+pub fn process_started_at(_pid: u32) -> Option<String> {
+    None
+}
+
 /// Unsupported platform stub.
 pub fn foreground_group_leader_job(_process_group_id: u32) -> Option<ForegroundJob> {
     None

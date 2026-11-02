@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Codex terminal clients can register the selected thread with foreground process proof, preventing inherited app-server pane environments and stale hook reports from replacing the client’s session identity.
+
 ## [0.8.2] - 2026-08-19
 
 ### Added

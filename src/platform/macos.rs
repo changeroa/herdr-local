@@ -775,6 +775,16 @@ fn process_bsdinfo(pid: u32) -> Option<libc::proc_bsdinfo> {
     (ret == size).then_some(info)
 }
 
+pub fn process_started_at(pid: u32) -> Option<String> {
+    let info = process_bsdinfo(pid)?;
+    (info.pbi_status != libc::SZOMB)
+        .then(|| format!("{}:{}", info.pbi_start_tvsec, info.pbi_start_tvusec))
+}
+
+pub fn foreground_job_for_client_registration(child_pid: u32) -> Option<ForegroundJob> {
+    foreground_job(child_pid)
+}
+
 fn comm_from_bsdinfo(info: &libc::proc_bsdinfo) -> Option<String> {
     let end = info
         .pbi_comm

@@ -1365,6 +1365,9 @@ fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
             agent_session_id,
             agent_session_path,
             session_start_source,
+            client_process_id: None,
+            client_process_started_at: None,
+            client_terminal_id: None,
         },
     ))
 }

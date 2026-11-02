@@ -550,6 +550,10 @@ Herdr 在本地 socket 上使用换行分隔的 JSON。在 Unix 上,那个 socke
 }
 ```
 
+Codex 终端客户端可以使用 source `herdr:codex-client`、agent `codex`、`session_start_source: "select"` 和 `agent_session_id` 上报当前选择的线程。每次请求必须包含 `client_process_id`、`client_process_started_at`、`client_terminal_id`，以及同一进程代次内严格递增的 `seq`。从 `pane.process_info.foreground_processes` 中匹配 PID 的 `started_at` 原样复制 `client_process_started_at`，从 `session.snapshot` 获取终端 ID。Herdr 在应用报告时验证对应终端以及前台 Codex 进程代次。无法提供进程证明时拒绝报告。
+
+使用 `session_start_source: "clear"` 并省略会话 ID，可以清除所选线程并保留当前客户端的所有权保护。旧的 `herdr:codex` 报告无法覆盖已验证的前台客户端，包括 clear 之后。查询身份时会重新验证前台所有权；进入后台、退出或 PID 复用会解除运行时所有权。重启后仍保留已保存线程供恢复使用，但在客户端重新验证前省略 `agent_session`。此验证用于防止继承的窗格环境错误，并非对同一用户下恶意进程的身份认证。
+
 Herdr 存有原生会话引用时,`pane.get`、`pane.list`、`agent.get` 和 `agent.list` 暴露一个只读的 `agent_session` 对象:
 
 ```json

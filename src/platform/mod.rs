@@ -18,6 +18,54 @@ pub struct ForegroundJob {
     pub processes: Vec<ForegroundProcess>,
 }
 
+/// Check the exact process, rather than another Codex in the same job. Read the
+/// generation on both sides of enumeration so PID reuse fails closed.
+pub(crate) fn verify_codex_client_process(
+    child_pid: u32,
+    process_id: u32,
+    started_at: &str,
+) -> bool {
+    verify_codex_client_process_with(
+        child_pid,
+        process_id,
+        started_at,
+        process_started_at,
+        foreground_job_for_client_registration,
+    )
+}
+
+fn verify_codex_client_process_with(
+    child_pid: u32,
+    process_id: u32,
+    started_at: &str,
+    mut process_generation: impl FnMut(u32) -> Option<String>,
+    foreground: impl FnOnce(u32) -> Option<ForegroundJob>,
+) -> bool {
+    if process_id == 0
+        || started_at.is_empty()
+        || process_generation(process_id).as_deref() != Some(started_at)
+    {
+        return false;
+    }
+    let Some(job) = foreground(child_pid) else {
+        return false;
+    };
+    let Some(process) = job
+        .processes
+        .into_iter()
+        .find(|process| process.pid == process_id)
+    else {
+        return false;
+    };
+    let exact_job = ForegroundJob {
+        process_group_id: process_id,
+        processes: vec![process],
+    };
+    crate::detect::identify_agent_in_job(&exact_job)
+        .is_some_and(|(agent, _)| agent == crate::detect::Agent::Codex)
+        && process_generation(process_id).as_deref() == Some(started_at)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {
     Hangup,
@@ -379,6 +427,98 @@ impl PrefixInputSource for RealPrefixInputSource {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    fn codex_client_job(pid: u32, name: &str) -> ForegroundJob {
+        ForegroundJob {
+            process_group_id: pid,
+            processes: vec![ForegroundProcess {
+                pid,
+                name: name.into(),
+                argv0: None,
+                argv: None,
+                cmdline: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn codex_client_foreground_proof_requires_exact_pid_agent_and_generation() {
+        assert!(verify_codex_client_process_with(
+            10,
+            42,
+            "start",
+            |_| Some("start".into()),
+            |_| Some(codex_client_job(42, "codex"))
+        ));
+        for (pid, name, generation) in [
+            (43, "codex", "start"),
+            (42, "sleep", "start"),
+            (42, "codex", "reused"),
+        ] {
+            assert!(!verify_codex_client_process_with(
+                10,
+                42,
+                "start",
+                |_| Some(generation.into()),
+                |_| Some(codex_client_job(pid, name))
+            ));
+        }
+        // A still-live Codex that has been backgrounded is no longer the owner.
+        assert!(!verify_codex_client_process_with(
+            10,
+            42,
+            "start",
+            |_| Some("start".into()),
+            |_| Some(codex_client_job(99, "codex"))
+        ));
+        assert!(!verify_codex_client_process_with(
+            10,
+            42,
+            "start",
+            |_| Some("start".into()),
+            |_| None
+        ));
+        assert!(!verify_codex_client_process_with(
+            10,
+            42,
+            "start",
+            |_| None,
+            |_| Some(codex_client_job(42, "codex"))
+        ));
+    }
+
+    #[test]
+    fn codex_client_foreground_proof_rechecks_generation_after_enumeration() {
+        let mut generations = [Some("before".into()), Some("after".into())].into_iter();
+        assert!(!verify_codex_client_process_with(
+            10,
+            42,
+            "before",
+            |_| generations.next().flatten(),
+            |_| Some(codex_client_job(42, "codex"))
+        ));
+        // A Codex elsewhere in the same foreground group cannot validate a shell PID.
+        let mut job = codex_client_job(42, "bash");
+        job.processes
+            .extend(codex_client_job(43, "codex").processes);
+        assert!(!verify_codex_client_process_with(
+            10,
+            42,
+            "start",
+            |_| Some("start".into()),
+            |_| Some(job)
+        ));
+    }
+
+    #[test]
+    fn codex_client_current_process_generation_is_stable_when_supported() {
+        let first = process_started_at(std::process::id());
+        if cfg!(any(target_os = "macos", target_os = "linux", windows)) {
+            assert!(first.as_ref().is_some_and(|stamp| !stamp.is_empty()));
+        }
+        assert_eq!(first, process_started_at(std::process::id()));
+        assert_eq!(process_started_at(u32::MAX), None);
+    }
 
     #[test]
     fn terminal_resize_signal_is_recorded_once_per_delivery() {

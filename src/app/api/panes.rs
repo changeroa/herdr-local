@@ -224,6 +224,7 @@ impl App {
                     .map(|process| PaneProcessInfoProcess {
                         pid: process.pid,
                         name: process.name,
+                        started_at: crate::platform::process_started_at(process.pid),
                         argv0: process.argv0,
                         argv: process.argv,
                         cmdline: process.cmdline,
@@ -1233,6 +1234,13 @@ impl App {
         id: String,
         params: PaneReportAgentParams,
     ) -> String {
+        if params.source == "herdr:codex-client" {
+            return encode_error(
+                id,
+                "invalid_client_proof",
+                "client identity requires pane.report_agent_session with process proof",
+            );
+        }
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
@@ -1262,12 +1270,15 @@ impl App {
         id: String,
         params: PaneReportAgentSessionParams,
     ) -> String {
-        let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
         let Some(agent_label) = normalize_reported_agent_label(&params.agent) else {
             return invalid_agent(id);
         };
+        if params.source == "herdr:codex-client" {
+            return self.handle_codex_client_session(id, ws_idx, pane_id, agent_label, params);
+        }
         self.handle_internal_event(crate::events::AppEvent::AgentSessionReported {
             pane_id,
             session_ref: crate::agent_resume::session_ref_from_report(
@@ -1285,6 +1296,158 @@ impl App {
         });
 
         encode_success(id, ResponseResult::Ok {})
+    }
+
+    fn handle_codex_client_session(
+        &mut self,
+        id: String,
+        ws_idx: usize,
+        pane_id: PaneId,
+        agent_label: String,
+        params: PaneReportAgentSessionParams,
+    ) -> String {
+        use crate::terminal::state::CodexClientProof;
+
+        self.refresh_codex_client_owner(pane_id);
+
+        let (Some(process_id), Some(started_at), Some(terminal_id), Some(seq)) = (
+            params.client_process_id,
+            params.client_process_started_at,
+            params.client_terminal_id,
+            params.seq,
+        ) else {
+            return encode_error(
+                id,
+                "invalid_client_proof",
+                "client process, generation, terminal and sequence are required",
+            );
+        };
+        let session_ref = match (
+            agent_label.as_str(),
+            params.session_start_source.as_deref(),
+            params.agent_session_id,
+            params.agent_session_path,
+        ) {
+            ("codex", Some("select"), Some(session_id), None) => {
+                let Some(session_ref) = crate::agent_resume::AgentSessionRef::id(session_id) else {
+                    return encode_error(
+                        id,
+                        "invalid_client_session",
+                        "invalid selected session id",
+                    );
+                };
+                Some(session_ref)
+            }
+            ("codex", Some("clear"), None, None) => None,
+            _ => {
+                return encode_error(
+                    id,
+                    "invalid_client_session",
+                    "expected Codex select with session id or clear without session id",
+                )
+            }
+        };
+        let proof = CodexClientProof {
+            process_id,
+            started_at,
+            terminal_id,
+            seq,
+        };
+        let Some(attached_terminal_id) = self.state.workspaces[ws_idx].terminal_id(pane_id) else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        if attached_terminal_id.as_str() != proof.terminal_id {
+            return encode_error(
+                id,
+                "invalid_client_proof",
+                "client terminal does not match pane",
+            );
+        }
+        let Some(terminal) = self.state.terminals.get(attached_terminal_id) else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        if !terminal.accepts_codex_client_proof(&proof) {
+            return encode_error(
+                id,
+                "stale_client_report",
+                "invalid or stale client sequence",
+            );
+        }
+        let shell_pid = self
+            .lookup_runtime(ws_idx, pane_id)
+            .and_then(|(runtime, _)| runtime.child_pid());
+        if !shell_pid.is_some_and(|shell_pid| {
+            crate::platform::verify_codex_client_process(
+                shell_pid,
+                proof.process_id,
+                &proof.started_at,
+            )
+        }) {
+            return encode_error(
+                id,
+                "invalid_client_proof",
+                "client is not the live foreground Codex process generation",
+            );
+        }
+        // There is no queue or await between live proof verification and mutation.
+        self.handle_internal_event(crate::events::AppEvent::CodexClientSessionReported {
+            pane_id,
+            proof,
+            session_ref,
+        });
+        encode_success(id, ResponseResult::Ok {})
+    }
+
+    pub(super) fn refresh_codex_client_owner(&mut self, pane_id: PaneId) {
+        let proof = self
+            .state
+            .workspaces
+            .iter()
+            .find_map(|workspace| workspace.terminal_id(pane_id))
+            .and_then(|terminal_id| self.state.terminals.get(terminal_id))
+            .and_then(|terminal| terminal.codex_client_proof())
+            .cloned();
+        let Some(proof) = proof else {
+            return;
+        };
+        let shell_pid = self
+            .find_pane(pane_id)
+            .and_then(|(ws_idx, _)| self.lookup_runtime(ws_idx, pane_id))
+            .and_then(|(runtime, _)| runtime.child_pid());
+        if !shell_pid.is_some_and(|shell_pid| {
+            crate::platform::verify_codex_client_process(
+                shell_pid,
+                proof.process_id,
+                &proof.started_at,
+            )
+        }) {
+            self.handle_internal_event(crate::events::AppEvent::CodexClientOwnershipExpired {
+                pane_id,
+                proof,
+            });
+        }
+    }
+
+    pub(super) fn refresh_codex_client_owners(&mut self) {
+        // API identity queries only: never run process inspection from view or
+        // render loops. Unregistered terminals incur no OS inspection.
+        let panes: Vec<_> = self
+            .state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.tabs.iter())
+            .flat_map(|tab| tab.panes.iter())
+            .filter(|(_, pane)| {
+                self.state
+                    .terminals
+                    .get(&pane.attached_terminal_id)
+                    .is_some_and(|terminal| terminal.codex_client_proof().is_some())
+            })
+            .map(|(pane_id, _)| *pane_id)
+            .collect();
+        for pane_id in panes {
+            self.refresh_codex_client_owner(pane_id);
+        }
     }
 
     pub(super) fn handle_pane_report_metadata(
@@ -1481,6 +1644,13 @@ impl App {
         id: String,
         params: PaneReleaseAgentParams,
     ) -> String {
+        if params.source == "herdr:codex-client" {
+            return encode_error(
+                id,
+                "invalid_client_proof",
+                "client clear requires pane.report_agent_session with process proof",
+            );
+        }
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
@@ -1922,6 +2092,194 @@ mod tests {
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
         (app, public_pane_id)
+    }
+
+    fn app_with_codex_client_workspace() -> (App, String) {
+        let (mut app, pane_id) = app_with_test_workspace();
+        app.state.active = Some(0);
+        (app, pane_id)
+    }
+
+    fn codex_client_request(
+        app: &mut App,
+        pane_id: &str,
+        overrides: serde_json::Value,
+    ) -> serde_json::Value {
+        let target = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0]
+            .terminal_id(target)
+            .unwrap()
+            .to_string();
+        let mut params = serde_json::json!({
+            "pane_id": pane_id, "source": "herdr:codex-client", "agent": "codex",
+            "seq": 1, "session_start_source": "select", "agent_session_id": "selected",
+            "client_process_id": std::process::id(),
+            "client_process_started_at": "not-the-current-generation",
+            "client_terminal_id": terminal_id,
+        });
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(overrides.as_object().unwrap().clone());
+        let request = serde_json::from_value(serde_json::json!({
+            "id": "client", "method": "pane.report_agent_session", "params": params,
+        }))
+        .unwrap();
+        serde_json::from_str(&app.handle_api_request(request)).unwrap()
+    }
+
+    #[test]
+    fn codex_client_api_rejects_missing_proof_wrong_terminal_and_unverified_process() {
+        for (overrides, error) in [
+            (
+                serde_json::json!({"client_process_id": null}),
+                "invalid_client_proof",
+            ),
+            (serde_json::json!({"seq": null}), "invalid_client_proof"),
+            (
+                serde_json::json!({"client_terminal_id": "other-terminal"}),
+                "invalid_client_proof",
+            ),
+            (
+                serde_json::json!({"client_process_id": 0}),
+                "stale_client_report",
+            ),
+            (serde_json::json!({}), "invalid_client_proof"),
+            (
+                serde_json::json!({"session_start_source": "clear"}),
+                "invalid_client_session",
+            ),
+            (
+                serde_json::json!({"session_start_source": "select", "agent_session_id": null}),
+                "invalid_client_session",
+            ),
+        ] {
+            let (mut app, pane_id) = app_with_codex_client_workspace();
+            let response = codex_client_request(&mut app, &pane_id, overrides);
+            assert_eq!(response["error"]["code"], error, "{response}");
+            assert!(app
+                .state
+                .terminals
+                .values()
+                .all(|terminal| terminal.codex_client_proof().is_none()
+                    && terminal.persisted_agent_session.is_none()));
+            app.state.assert_invariants_for_test();
+        }
+        let (mut app, _) = app_with_codex_client_workspace();
+        let response = codex_client_request(&mut app, "missing:p999", serde_json::json!({}));
+        assert_eq!(response["error"]["code"], "pane_not_found");
+    }
+
+    #[test]
+    fn codex_client_source_cannot_bypass_proof_using_state_or_release_api() {
+        let (mut app, pane_id) = app_with_codex_client_workspace();
+        for method in ["pane.report_agent", "pane.release_agent"] {
+            let request = serde_json::from_value(serde_json::json!({
+                "id": "unverified", "method": method,
+                "params": {"pane_id": pane_id, "source": "herdr:codex-client", "agent": "codex", "state": "working", "agent_session_id": "wrong"},
+            })).unwrap();
+            let response: serde_json::Value =
+                serde_json::from_str(&app.handle_api_request(request)).unwrap();
+            assert_eq!(response["error"]["code"], "invalid_client_proof");
+        }
+        assert!(app
+            .state
+            .terminals
+            .values()
+            .all(|terminal| terminal.persisted_agent_session.is_none()));
+    }
+
+    #[test]
+    fn codex_client_snapshot_hides_restored_unverified_identity_and_preserves_resume() {
+        let (mut app, pane_id) = app_with_codex_client_workspace();
+        let target = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].terminal_id(target).unwrap().clone();
+        let saved = crate::agent_resume::session_ref_from_snapshot(
+            "herdr:codex-client",
+            "codex",
+            crate::agent_resume::AgentSessionRefKind::Id,
+            "saved-thread",
+        )
+        .unwrap();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_persisted_agent_session(saved.clone());
+        let request = serde_json::from_value(
+            serde_json::json!({"id":"snapshot", "method":"session.snapshot", "params":{}}),
+        )
+        .unwrap();
+        let response: serde_json::Value =
+            serde_json::from_str(&app.handle_api_request(request)).unwrap();
+        let pane = response["result"]["snapshot"]["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|pane| pane["pane_id"] == pane_id)
+            .unwrap();
+        assert!(pane.get("agent_session").is_none());
+        assert!(!response.to_string().contains("saved-thread"));
+        let terminal = app.state.terminals.get(&terminal_id).unwrap();
+        assert_eq!(terminal.persisted_agent_session.as_ref(), Some(&saved));
+        assert_eq!(
+            crate::agent_resume::plan(&saved.source, &saved.agent, &saved.session_ref)
+                .unwrap()
+                .argv,
+            vec!["codex", "resume", "saved-thread"]
+        );
+    }
+
+    #[test]
+    fn codex_client_snapshot_revalidates_owner_before_exposing_client_source() {
+        let (mut app, pane_id) = app_with_codex_client_workspace();
+        let target = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].terminal_id(target).unwrap().clone();
+        let proof = crate::terminal::state::CodexClientProof {
+            process_id: std::process::id(),
+            started_at: "generation".into(),
+            terminal_id: terminal_id.to_string(),
+            seq: 1,
+        };
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_verified_codex_client_session(
+                proof,
+                crate::agent_resume::AgentSessionRef::id("selected"),
+            )
+            .unwrap();
+        // Pure projection retains the distinct source after validated mutation.
+        let pane = app.pane_info(0, target).unwrap();
+        assert_eq!(pane.agent_session.unwrap().source, "herdr:codex-client");
+        // This synthetic client has no foreground runtime: any identity query
+        // must expire its owner before serializing authoritative session data.
+        let request = serde_json::from_value(
+            serde_json::json!({"id":"snapshot", "method":"session.snapshot", "params":{}}),
+        )
+        .unwrap();
+        let response: serde_json::Value =
+            serde_json::from_str(&app.handle_api_request(request)).unwrap();
+        let pane = response["result"]["snapshot"]["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|pane| pane["pane_id"] == pane_id)
+            .unwrap();
+        assert!(pane.get("agent_session").is_none());
+        let terminal = app.state.terminals.get(&terminal_id).unwrap();
+        assert!(terminal.codex_client_proof().is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .unwrap()
+                .session_ref
+                .value,
+            "selected"
+        );
+        app.state.assert_invariants_for_test();
     }
 
     #[test]

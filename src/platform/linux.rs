@@ -354,6 +354,26 @@ fn process_pgrp_and_comm(pid: u32) -> Option<(i32, String)> {
     process_pgrp_and_comm_from_stat(&stat)
 }
 
+pub fn process_started_at(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    process_started_at_from_stat(&stat)
+}
+
+fn process_started_at_from_stat(stat: &str) -> Option<String> {
+    let rest = stat.get(stat.rfind(')')? + 2..)?;
+    let mut fields = rest.split_whitespace();
+    if matches!(fields.next()?, "Z" | "X" | "x") {
+        return None;
+    }
+    // Field 22 (starttime) follows 18 fields after state (field 3).
+    let ticks: u64 = fields.nth(18)?.parse().ok()?;
+    Some(ticks.to_string())
+}
+
+pub fn foreground_job_for_client_registration(child_pid: u32) -> Option<ForegroundJob> {
+    foreground_job(child_pid)
+}
+
 fn process_pgrp_and_comm_from_stat(stat: &str) -> Option<(i32, String)> {
     let close = stat.rfind(')')?;
     let comm = stat.get(1 + stat.find('(')?..close)?.to_string();
