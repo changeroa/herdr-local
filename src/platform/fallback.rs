@@ -228,3 +228,13 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
 pub fn show_desktop_notification(_title: &str, _body: Option<&str>) -> std::io::Result<bool> {
     Ok(false)
 }
+
+#[cfg(unix)]
+pub(crate) fn local_socket_peer_pid(
+    _stream: &std::os::unix::net::UnixStream,
+) -> std::io::Result<u32> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "local socket peer PID unavailable",
+    ))
+}

@@ -1300,6 +1300,7 @@ impl HeadlessServer {
                 continue;
             };
             let mut handoff_runtime = runtime.handoff_runtime_state(pane_id);
+            handoff_runtime.terminal_id = Some(terminal_id.clone());
             let has_agent_session = self
                 .app
                 .state

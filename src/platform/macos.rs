@@ -1004,6 +1004,31 @@ pub fn process_exists(pid: u32) -> bool {
     }
 }
 
+/// Kernel-authenticated process at the other end of a local handoff/API socket.
+pub(crate) fn local_socket_peer_pid(
+    stream: &std::os::unix::net::UnixStream,
+) -> std::io::Result<u32> {
+    use std::os::fd::AsRawFd;
+    let mut value: libc::pid_t = 0;
+    let mut len = std::mem::size_of_val(&value) as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            0,
+            libc::LOCAL_PEERPID,
+            &mut value as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if len as usize != std::mem::size_of_val(&value) || value <= 0 {
+        return Err(std::io::Error::other("missing local socket peer PID"));
+    }
+    Ok(value as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HandoffRuntimeState {
     pub pane_id: u32,
+    /// Present only for live transfer; cold restores allocate a new identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_id: Option<crate::terminal::TerminalId>,
     pub child_pid: u32,
     pub rows: u16,
     pub cols: u16,

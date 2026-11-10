@@ -769,6 +769,31 @@ fn process_session_id(pid: u32) -> Option<i32> {
     fields.get(3)?.parse().ok()
 }
 
+/// Kernel-authenticated process at the other end of a local handoff/API socket.
+pub(crate) fn local_socket_peer_pid(
+    stream: &std::os::unix::net::UnixStream,
+) -> std::io::Result<u32> {
+    use std::os::fd::AsRawFd;
+    let mut value: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of_val(&value) as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut value as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if len as usize != std::mem::size_of_val(&value) || value.pid <= 0 {
+        return Err(std::io::Error::other("missing local socket peer PID"));
+    }
+    Ok(value.pid as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

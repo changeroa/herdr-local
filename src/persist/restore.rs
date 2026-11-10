@@ -102,6 +102,17 @@ pub fn restore_handoff(
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 ) -> std::io::Result<RestoredSession> {
+    let mut terminal_ids = HashSet::new();
+    for import in imports.values() {
+        let id = import.state.terminal_id.as_ref().ok_or_else(|| {
+            std::io::Error::other("handoff runtime is missing its terminal identity")
+        })?;
+        if id.as_str().is_empty() || !terminal_ids.insert(id) {
+            return Err(std::io::Error::other(
+                "handoff runtime has duplicate or empty terminal identity",
+            ));
+        }
+    }
     restore_with_imports_strict(
         snapshot,
         None,
@@ -528,6 +539,10 @@ fn restore_tab(
             .unwrap_or_default();
         let imported_runtime = old_pane_id.and_then(|old_id| imported_panes.remove(&old_id));
         let was_imported = imported_runtime.is_some();
+        #[cfg(unix)]
+        let imported_terminal_id = imported_runtime
+            .as_ref()
+            .and_then(|import| import.state.terminal_id.clone());
         let pending_native_agent_restore = if was_imported {
             None
         } else {
@@ -627,6 +642,9 @@ fn restore_tab(
 
         match runtime_result {
             Ok(runtime) => {
+                #[cfg(unix)]
+                let terminal_id = imported_terminal_id.unwrap_or_else(TerminalId::alloc);
+                #[cfg(not(unix))]
                 let terminal_id = TerminalId::alloc();
                 let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
                 if was_imported {

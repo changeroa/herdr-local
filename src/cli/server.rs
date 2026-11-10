@@ -7,6 +7,15 @@ pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>
 
     match subcommand {
         "stop" => server_stop(&args[1..]).map(Some),
+        #[cfg(unix)]
+        "prepare-handoff-identity" => {
+            if args.len() != 3 {
+                eprintln!("usage: herdr server prepare-handoff-identity <new-file> <nonce>");
+                return Ok(Some(2));
+            }
+            crate::server::handoff_identity::prepare(std::path::Path::new(&args[1]), &args[2])?;
+            Ok(Some(0))
+        }
         "live-handoff" => server_live_handoff(&args[1..]).map(Some),
         "--handoff-import" => Ok(None),
         "reload-config" => server_reload_config(&args[1..]).map(Some),
@@ -256,6 +265,10 @@ fn print_server_help() {
     eprintln!("herdr server commands:");
     eprintln!("  herdr server                run as headless server");
     eprintln!("  herdr server stop           stop the running server via the API socket");
+    #[cfg(unix)]
+    eprintln!(
+        "  herdr server prepare-handoff-identity <file> <nonce>   prepare legacy identity transfer"
+    );
     eprintln!("  herdr server live-handoff   hand off live panes to a new local server");
     eprintln!("  herdr server reload-config  reload config.toml in the running server");
     eprintln!("  herdr server agent-manifests [--json]  show agent detection manifest status");
