@@ -91,6 +91,16 @@ pub enum AppEvent {
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
         session_start_source: Option<String>,
     },
+    /// Application-time foreground proof was verified by the runtime/API layer.
+    CodexClientSessionReported {
+        pane_id: PaneId,
+        proof: crate::terminal::state::CodexClientProof,
+        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+    },
+    CodexClientOwnershipExpired {
+        pane_id: PaneId,
+        proof: crate::terminal::state::CodexClientProof,
+    },
     /// Display-only agent metadata was reported for a pane.
     HookMetadataReported {
         pane_id: PaneId,

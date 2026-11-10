@@ -534,6 +534,9 @@ fn terminal_agent_session_info(
     terminal
         .persisted_agent_session
         .as_ref()
+        .filter(|session| {
+            session.source != "herdr:codex-client" || terminal.codex_client_proof().is_some()
+        })
         .map(|session| crate::api::schema::AgentSessionInfo {
             source: session.source.clone(),
             agent: session.agent.clone(),

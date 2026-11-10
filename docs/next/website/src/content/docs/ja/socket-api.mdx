@@ -554,6 +554,10 @@ Herdr はローカルソケット上の改行区切り JSON を使います。Un
 }
 ```
 
+Codex ターミナルクライアントは、source `herdr:codex-client`、agent `codex`、`session_start_source: "select"`、`agent_session_id` で選択中のスレッドを報告できます。各リクエストには `client_process_id`、`client_process_started_at`、`client_terminal_id`、および同じプロセス世代内で単調増加する `seq` が必要です。`client_process_started_at` には、`pane.process_info.foreground_processes` の一致する PID の `started_at` をそのまま使い、ターミナル ID は `session.snapshot` から取得します。Herdr は適用時にターミナルとフォアグラウンド Codex プロセスの世代を検証します。証明を取得できない環境では報告を拒否します。
+
+セッション ID を省略して `session_start_source: "clear"` を送ると、所有権ガードを維持して選択を解除します。旧来の `herdr:codex` 報告は、clear 後も検証済みのフォアグラウンドクライアントを上書きできません。ID 取得時にフォアグラウンド所有権を再検証し、バックグラウンド化、終了、PID 再利用時には実行中の所有権を解除します。再起動後も保存されたスレッドを再開できますが、クライアントが再検証するまで `agent_session` を公開しません。この検証は継承されたペイン環境の誤りを防ぐためのもので、同じユーザーの悪意あるプロセスに対する認証ではありません。
+
 Herdr に保存されたネイティブセッション参照があるとき、`pane.get`、`pane.list`、`agent.get`、`agent.list` は読み取り専用の `agent_session` オブジェクトを公開します:
 
 ```json

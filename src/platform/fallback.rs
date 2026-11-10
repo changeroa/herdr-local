@@ -163,6 +163,14 @@ pub fn foreground_job(_child_pid: u32) -> Option<ForegroundJob> {
     None
 }
 
+pub fn foreground_job_for_client_registration(_child_pid: u32) -> Option<ForegroundJob> {
+    None
+}
+
+pub fn process_started_at(_pid: u32) -> Option<String> {
+    None
+}
+
 /// Unsupported platform stub.
 pub fn foreground_group_leader_job(_process_group_id: u32) -> Option<ForegroundJob> {
     None
@@ -219,4 +227,14 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
 /// Unsupported platform stub.
 pub fn show_desktop_notification(_title: &str, _body: Option<&str>) -> std::io::Result<bool> {
     Ok(false)
+}
+
+#[cfg(unix)]
+pub(crate) fn local_socket_peer_pid(
+    _stream: &std::os::unix::net::UnixStream,
+) -> std::io::Result<u32> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "local socket peer PID unavailable",
+    ))
 }

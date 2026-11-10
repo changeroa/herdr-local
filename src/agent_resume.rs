@@ -128,7 +128,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
                 session_ref.value.clone(),
             ]
         }
-        ("herdr:codex", "codex", AgentSessionRefKind::Id) => {
+        ("herdr:codex" | "herdr:codex-client", "codex", AgentSessionRefKind::Id) => {
             vec!["codex".into(), "resume".into(), session_ref.value.clone()]
         }
         ("herdr:copilot", "copilot", AgentSessionRefKind::Id) => {
@@ -218,6 +218,13 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
 }
 
 pub fn dedupe_key(source: &str, agent: &str, session_ref: &AgentSessionRef) -> String {
+    // Both reporters refer to the same native Codex thread. A stale legacy
+    // pane and a verified client must not resume that thread twice on restore.
+    let source = if (source, agent) == ("herdr:codex-client", "codex") {
+        "herdr:codex"
+    } else {
+        source
+    };
     format!(
         "{source}\u{0}{agent}\u{0}{:?}\u{0}{}",
         session_ref.kind, session_ref.value
@@ -229,6 +236,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
         (source, agent),
         ("herdr:claude", "claude")
             | ("herdr:codex", "codex")
+            | ("herdr:codex-client", "codex")
             | ("herdr:copilot", "copilot")
             | ("herdr:devin", "devin")
             | ("herdr:droid", "droid")
@@ -643,6 +651,23 @@ mod tests {
         );
         assert_eq!(normalize_session_start_source(Some("other".into())), None);
         assert_eq!(normalize_session_start_source(None), None);
+    }
+
+    #[test]
+    fn codex_client_and_legacy_resume_share_native_session_dedupe_key() {
+        let session_ref = AgentSessionRef::id("same-thread").unwrap();
+        let client = plan("herdr:codex-client", "codex", &session_ref).unwrap();
+        let legacy = plan("herdr:codex", "codex", &session_ref).unwrap();
+        assert_eq!(client.argv, legacy.argv);
+        assert_eq!(client.dedupe_key, legacy.dedupe_key);
+        let saved = session_ref_from_snapshot(
+            "herdr:codex-client",
+            "codex",
+            AgentSessionRefKind::Id,
+            "same-thread",
+        )
+        .unwrap();
+        assert_eq!(saved.source, "herdr:codex-client");
     }
 
     #[test]

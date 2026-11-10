@@ -2835,6 +2835,22 @@ impl AppState {
                     .collect()
                 }
             }
+            AppEvent::CodexClientSessionReported {
+                pane_id,
+                proof,
+                session_ref,
+            } => self
+                .update_terminal_state(pane_id, |terminal| {
+                    terminal.set_verified_codex_client_session(proof, session_ref)
+                })
+                .into_iter()
+                .collect(),
+            AppEvent::CodexClientOwnershipExpired { pane_id, proof } => self
+                .update_terminal_state(pane_id, |terminal| {
+                    terminal.expire_codex_client_owner(&proof)
+                })
+                .into_iter()
+                .collect(),
             AppEvent::AgentSessionReported {
                 pane_id,
                 source,

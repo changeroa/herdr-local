@@ -307,7 +307,10 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),
-        ("herdr:hermes", "hermes") | ("herdr:qwen", "qwen") | ("herdr:antigravity_cli", "agy")
+        ("herdr:hermes", "hermes")
+            | ("herdr:qwen", "qwen")
+            | ("herdr:antigravity_cli", "agy")
+            | ("herdr:codex-client", "codex")
     )
 }
 

@@ -96,6 +96,12 @@ Unlike snapshot restore, pane history replay, and native agent session restore, 
 
 A successful handoff preserves long-lived server-owned session state: pane PTYs and processes, agent identity and durable metadata, and plugin/session state needed by the replacement server. It does not preserve transient coordination across the replacement boundary. In-flight CLI or API requests, waits, subscription streams, client sockets, and pane-to-pane messages may be interrupted; clients should reconnect and retry them.
 
+Live handoff preserves the terminal ID of each transferred PTY. Cold restores still create new terminal identities. Native client ownership is not transferred: each surviving client must reconnect and revalidate its foreground process before its selected session becomes authoritative.
+
+Older exporters, including 0.8.2, omit terminal IDs. The replacement rejects those transfers unless an explicit identity bridge was prepared before handoff. For a controlled local migration on macOS or Linux, run the replacement binary's `server prepare-handoff-identity <new-file> <nonce>` command against the old session's API socket. Use an owner-only directory and an unguessable nonce of at least 32 characters. A handoff-scoped import wrapper must set `HERDR_HANDOFF_IDENTITY_BRIDGE` to that file and `HERDR_HANDOFF_IDENTITY_NONCE` to the nonce, then execute the replacement binary with the import arguments unchanged. Supply that wrapper through `server live-handoff --import-exe <wrapper>`; do not set these variables globally.
+
+The bridge expires after two minutes and is consumed during import. It requires unchanged server generation, exact pane membership, shell and foreground process generations, and matching transferred PTYs. Missing or changed proof causes rollback; prepare fresh proof before retrying. The preparation command only reads the old session and creates the bridge file—it does not initiate handoff.
+
 Live handoff is experimental and opt-in:
 
 ```bash

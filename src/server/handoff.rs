@@ -236,7 +236,7 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
     stream.flush()?;
 
     let manifest_line = read_line_unbuffered(&mut stream)?;
-    let manifest: HandoffManifest =
+    let mut manifest: HandoffManifest =
         serde_json::from_str(&manifest_line).map_err(io::Error::other)?;
     if manifest.version != HANDOFF_VERSION {
         return Err(io::Error::other(format!(
@@ -265,9 +265,17 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
             crate::build_info::version()
         )));
     }
+    let identity_proofs = super::handoff_identity::complete_manifest(&mut manifest, &stream)?;
     stream.write_all(b"validated\n")?;
     stream.flush()?;
     let fds = recv_fds(&stream, manifest.panes.len())?;
+    if let Err(error) = super::handoff_identity::validate_fds(identity_proofs.as_deref(), &fds) {
+        use std::os::fd::FromRawFd;
+        for fd in fds {
+            drop(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) });
+        }
+        return Err(error);
+    }
     Ok(ReceivedHandoff {
         manifest,
         fds,

@@ -354,6 +354,26 @@ fn process_pgrp_and_comm(pid: u32) -> Option<(i32, String)> {
     process_pgrp_and_comm_from_stat(&stat)
 }
 
+pub fn process_started_at(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    process_started_at_from_stat(&stat)
+}
+
+fn process_started_at_from_stat(stat: &str) -> Option<String> {
+    let rest = stat.get(stat.rfind(')')? + 2..)?;
+    let mut fields = rest.split_whitespace();
+    if matches!(fields.next()?, "Z" | "X" | "x") {
+        return None;
+    }
+    // Field 22 (starttime) follows 18 fields after state (field 3).
+    let ticks: u64 = fields.nth(18)?.parse().ok()?;
+    Some(ticks.to_string())
+}
+
+pub fn foreground_job_for_client_registration(child_pid: u32) -> Option<ForegroundJob> {
+    foreground_job(child_pid)
+}
+
 fn process_pgrp_and_comm_from_stat(stat: &str) -> Option<(i32, String)> {
     let close = stat.rfind(')')?;
     let comm = stat.get(1 + stat.find('(')?..close)?.to_string();
@@ -747,6 +767,31 @@ fn process_session_id(pid: u32) -> Option<i32> {
     let rest = stat.get(stat.rfind(')')? + 2..)?;
     let fields: Vec<&str> = rest.split_whitespace().collect();
     fields.get(3)?.parse().ok()
+}
+
+/// Kernel-authenticated process at the other end of a local handoff/API socket.
+pub(crate) fn local_socket_peer_pid(
+    stream: &std::os::unix::net::UnixStream,
+) -> std::io::Result<u32> {
+    use std::os::fd::AsRawFd;
+    let mut value: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of_val(&value) as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut value as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if len as usize != std::mem::size_of_val(&value) || value.pid <= 0 {
+        return Err(std::io::Error::other("missing local socket peer PID"));
+    }
+    Ok(value.pid as u32)
 }
 
 #[cfg(test)]

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+- Live server handoff preserves terminal IDs, allowing surviving terminal clients to revalidate their session identity. Older exporters require an explicit, process-verified identity bridge; unproved transfers roll back instead of assigning new IDs.
+- Codex terminal clients can register the selected thread with foreground process proof, preventing inherited app-server pane environments and stale hook reports from replacing the client’s session identity.
+
 ## [0.8.2] - 2026-08-19
 
 ### Added

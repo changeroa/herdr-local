@@ -113,6 +113,11 @@ impl App {
         &mut self,
         ev: AppEvent,
     ) -> Vec<crate::app::actions::PaneStateUpdate> {
+        if let AppEvent::HookStateReported { pane_id, .. }
+        | AppEvent::AgentSessionReported { pane_id, .. } = &ev
+        {
+            self.refresh_codex_client_owner(*pane_id);
+        }
         if let AppEvent::TerminalBell { count, .. } = ev {
             if let Err(err) =
                 crate::terminal_effects::write_terminal_bells(&mut std::io::stdout(), count)
@@ -935,6 +940,18 @@ impl App {
         use crate::api::schema::{
             ErrorBody, ErrorResponse, Method, ResponseResult, SuccessResponse,
         };
+
+        if matches!(
+            &request.method,
+            Method::SessionSnapshot(_)
+                | Method::AgentList(_)
+                | Method::AgentGet(_)
+                | Method::PaneList(_)
+                | Method::PaneGet(_)
+                | Method::PaneCurrent(_)
+        ) {
+            self.refresh_codex_client_owners();
+        }
 
         let response = match request.method {
             Method::ServerStop(_) => {

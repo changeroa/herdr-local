@@ -882,6 +882,28 @@ fn live_handoff_preserves_pane_process_io() {
     ));
     wait_for_output(&api_socket, &pane_id, "got:before_replay");
 
+    let terminal_ids = |socket: &Path| -> std::collections::BTreeMap<String, String> {
+        let snapshot = request(
+            socket,
+            serde_json::json!({
+                "id": "test:identities", "method": "session.snapshot", "params": {}
+            }),
+        );
+        snapshot["result"]["snapshot"]["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pane| {
+                (
+                    pane["pane_id"].as_str().unwrap().to_string(),
+                    pane["terminal_id"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    let before_ids = terminal_ids(&api_socket);
+    assert_eq!(before_ids.len(), 2);
+    assert_ne!(before_ids[&pane_id], before_ids[&second_pane_id]);
     assert_ok(request(
         &api_socket,
         serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
@@ -894,6 +916,11 @@ fn live_handoff_preserves_pane_process_io() {
     thread::sleep(Duration::from_millis(300));
     wait_for_api(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(5));
+    assert_eq!(
+        terminal_ids(&api_socket),
+        before_ids,
+        "live PTYs must retain their terminal identities"
+    );
     assert_eq!(unsafe { libc::kill(child_pid as libc::pid_t, 0) }, 0);
     assert_eq!(unsafe { libc::kill(second_child_pid as libc::pid_t, 0) }, 0);
     assert!(

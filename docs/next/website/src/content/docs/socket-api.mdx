@@ -723,6 +723,10 @@ Session-only official integrations report native session references with `pane.r
 }
 ```
 
+Codex terminal clients can report their selected thread using source `herdr:codex-client`, agent `codex`, `session_start_source: "select"`, and `agent_session_id`. Every request must include `client_process_id`, `client_process_started_at`, `client_terminal_id`, and a strictly increasing `seq` for that process generation. Obtain the opaque `client_process_started_at` value from the matching PID's `started_at` in `pane.process_info.foreground_processes`; obtain the terminal ID from `session.snapshot`. Herdr verifies the exact terminal and foreground Codex process generation when applying the report. Unsupported or unavailable process proof is rejected.
+
+Use `session_start_source: "clear"` without a session ID to clear the selected thread while retaining the live client's ownership guard. Legacy `herdr:codex` reports cannot overwrite a verified foreground client, including after clear. Identity queries revalidate foreground ownership; backgrounding, exit, or PID reuse removes live ownership. A saved client thread remains available for resume after restart, but its `agent_session` is omitted until a client revalidates its proof. These reports protect against inherited pane environment mistakes, not hostile processes running as the same user.
+
 `pane.get`, `pane.list`, `agent.get`, and `agent.list` expose a read-only `agent_session` object when Herdr has a stored native session reference:
 
 ```json
